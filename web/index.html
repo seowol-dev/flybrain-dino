@@ -4,64 +4,73 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>초파리가 하는 크롬 공룡게임 — FlyWire 전뇌 시뮬레이션</title>
-<meta name="description" content="초파리 전뇌 커넥톰(138,639 뉴런)을 실시간으로 시뮬레이션해 크롬 공룡게임을 플레이한다.">
+<meta name="description" content="초파리 전뇌 커넥톰 138,639개 뉴런을 실시간 시뮬레이션해 크롬 공룡게임을 플레이한다.">
+<meta property="og:title" content="초파리가 하는 크롬 공룡게임">
+<meta property="og:description" content="FlyWire 전뇌 커넥톰 138,639개 뉴런이 화면을 보고 스페이스바를 누른다.">
+<meta property="og:image" content="./preview.png">
 <link rel="stylesheet" href="./style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪰</text></svg>">
 </head>
 <body>
 <canvas id="gl"></canvas>
+<div id="vignette"></div>
+
 <div id="ui">
-  <div class="panel" id="title">
-    <h1>초파리가 하는 크롬 공룡게임</h1>
-    <div class="sub">FlyWire 성체 초파리 전뇌 커넥톰 <b id="nneu">138,639</b>개 뉴런 ·
-      <b id="nsyn">54,492,592</b>개 시냅스를 leaky integrate-and-fire 로 실시간 시뮬레이션한 기록</div>
-    <div class="cite">뉴런 위치는 실제 FlyWire soma 좌표. 발화는 시뮬레이션 실측값.<br>
-      Dorkenwald et al. 2024 · Schlegel et al. 2024 · Shiu et al. 2024<br>
-      <a href="https://github.com/seowol-dev/flybrain-dino" target="_blank" rel="noopener"
-         style="color:#7fd4ff;pointer-events:auto">github.com/seowol-dev/flybrain-dino</a></div>
+  <header id="brand">
+    <div class="eyebrow">FlyWire v783 · 전뇌 시뮬레이션</div>
+    <h1>초파리가 하는<br>크롬 공룡게임</h1>
+    <p>뉴런 <b id="n_neu">138,639</b>개와 시냅스 <b id="n_syn">54,492,922</b>개를 그대로 배선한
+       전뇌 모델이 화면을 보고 스페이스바를 누른다.</p>
+    <div class="src">뉴런 위치는 실제 FlyWire soma 좌표, 발화는 시뮬레이션 실측값.<br>
+      <a href="https://github.com/seowol-dev/flybrain-dino" target="_blank" rel="noopener">github.com/seowol-dev/flybrain-dino</a>
+    </div>
+  </header>
+
+  <section id="gauge">
+    <div class="hd"><span>실시간 계측</span><b id="g_t">0.0 s</b></div>
+    <div class="metrics">
+      <div class="m"><i>넘은 선인장</i><b id="g_score">0</b></div>
+      <div class="m"><i>발화 중인 뉴런</i><b id="g_act">0</b></div>
+      <div class="m"><i>선인장 거리</i><b id="g_dist">–</b></div>
+      <div class="m"><i>각크기 θ</i><b id="g_theta">0<small>°</small></b></div>
+    </div>
+    <div id="loom">
+      <div class="lb"><span>루밍 지표 (중심 − 주변 라미나)</span><b id="g_sig">0.00</b></div>
+      <div class="track"><div class="fill" id="g_fill"></div><div class="mark" id="g_mark"></div></div>
+      <div class="cap" id="g_cap">임계를 넘으면 도약 — 실제 초파리의 도피 반사와 같은 자극이다.</div>
+    </div>
+  </section>
+
+  <aside id="eye">
+    <div class="frame"><canvas id="eyecanvas" width="440" height="270"></canvas></div>
+    <div class="cap"><b>파리가 보는 것</b> · 겹눈 광수용체 6,826개에 투영된 화면.
+      다가오는 선인장이 커지는 루밍 자극.</div>
+  </aside>
+
+  <div id="legend">
+    <div class="chip" style="color:#4d8fd6"><i></i><span>시엽</span><b>77,530</b></div>
+    <div class="chip" style="color:#8f7cc0"><i></i><span>중앙뇌</span><b>32,379</b></div>
+    <div class="chip" style="color:#e0913d"><i></i><span>시각투사</span><b>8,038</b></div>
+    <div class="chip" style="color:#f0576a"><i></i><span>하행뉴런</span><b>1,299</b></div>
   </div>
 
-  <div class="panel" id="stats">
-    <div class="row"><span class="k">시간</span><b id="s_t">0.0 s</b></div>
-    <div class="row"><span class="k">넘은 선인장</span><b id="s_score">0</b></div>
-    <div class="row"><span class="k">가장 가까운 선인장</span><b id="s_dist">–</b></div>
-    <div class="row"><span class="k">각크기 θ</span><b id="s_theta">0°</b></div>
-    <hr>
-    <div class="row"><span class="k">루밍 지표</span><b id="s_sig">0.00</b></div>
-    <div class="row"><span class="k">도약 임계</span><b id="s_th">1.80</b></div>
-    <div class="row"><span class="k">발화 중인 뉴런</span><b id="s_act">0</b></div>
-    <div class="row"><span class="k">도약</span><b id="s_jump">–</b></div>
-  </div>
+  <div id="caption"><h2></h2><p></p></div>
 
-  <div class="panel" id="flyview">
-    <canvas id="eyecanvas" width="420" height="260"></canvas>
-    <div class="cap">파리의 겹눈에 들어오는 장면 — 다가오는 선인장이 커지는 <b>루밍</b> 자극</div>
-  </div>
-
-  <div class="panel" id="caption"></div>
-
-  <div class="panel" id="legend">
-    <div><i style="background:#2e66a0"></i>시엽 (optic, 77,530)</div>
-    <div><i style="background:#6b578c"></i>중앙뇌 (central, 32,379)</div>
-    <div><i style="background:#d9852f"></i>시각투사 LPLC2·LC4 (8,038)</div>
-    <div><i style="background:#eb4859"></i>하행뉴런 DNp01 거대섬유 (1,299)</div>
-  </div>
-
-  <div class="panel" id="bar">
-    <button id="play">일시정지</button>
-    <input id="seek" type="range" min="0" max="100" value="0">
-    <button id="cam">시점</button>
-    <button id="kiosk">전시 모드</button>
-    <button id="full">전체화면</button>
-  </div>
+  <nav id="bar">
+    <button id="play" class="primary">일시정지</button>
+    <input id="seek" type="range" min="0" max="1000" value="0">
+    <button id="cam">시점 <span class="kbd">C</span></button>
+    <button id="kiosk">전시 모드 <span class="kbd">E</span></button>
+    <button id="full">전체화면 <span class="kbd">F</span></button>
+  </nav>
 </div>
-<div id="loading"><div style="text-align:center">
-  <div style="font-size:30px">🪰</div>
-  <div style="margin-top:10px;color:#8e9ab0" id="loadmsg">전뇌 기록 불러오는 중…</div>
+
+<div id="loading"><div class="box">
+  <div class="dot"></div>
+  <div class="t" id="loadmsg">전뇌 기록 불러오는 중…</div>
 </div></div>
-<script type="importmap">
-{"imports":{"three":"./vendor/three.module.js"}}
-</script>
+
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

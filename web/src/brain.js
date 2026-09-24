@@ -23,7 +23,7 @@ uniform float uMax;
 void main() {
   vAct = aAct; vBase = aBase;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  float px = aSize * uScale * (1.0 + 1.6 * aAct) / max(-mv.z, 0.05);
+  float px = aSize * uScale * (1.0 + 1.1 * aAct) / max(-mv.z, 0.05);
   gl_PointSize = clamp(px, 1.0, uMax);
   gl_Position = projectionMatrix * mv;
 }`;
@@ -37,9 +37,9 @@ void main() {
   float r2 = dot(d, d);
   if (r2 > 0.25) discard;
   float fall = exp(-r2 * 9.0);
-  vec3 hot = mix(vBase, vec3(1.0, 0.96, 0.85), clamp(vAct * 1.1, 0.0, 0.92));
-  float a = fall * (uDim + 1.35 * vAct);
-  gl_FragColor = vec4(hot * (0.55 + 1.9 * vAct), a);
+  vec3 hot = mix(vBase, vec3(1.0, 0.94, 0.80), clamp(vAct * 0.95, 0.0, 0.85));
+  float a = fall * (uDim + 0.85 * vAct);
+  gl_FragColor = vec4(hot * (0.42 + 1.05 * vAct), a);
 }`;
 
 export class Brain {
@@ -58,8 +58,8 @@ export class Brain {
       base[i * 3] = c[0]; base[i * 3 + 1] = c[1]; base[i * 3 + 2] = c[2];
       const sc = classes[run.cls[i]];
       // 월드 단위 반지름 (뇌 전체가 대략 반지름 1)
-      size[i] = (sc === 'descending' || sc === 'motor') ? 0.0115
-        : (sc === 'visual_projection' ? 0.0062 : 0.0034);
+      size[i] = (sc === 'descending' || sc === 'motor') ? 0.0095
+        : (sc === 'visual_projection' ? 0.0050 : 0.0028);
     }
     this.act = new Float32Array(this.N);
     g.setAttribute('aBase', new THREE.BufferAttribute(base, 3));
@@ -103,6 +103,6 @@ export class Brain {
   setViewport(heightPx, fovDeg) {
     const s = heightPx / (2 * Math.tan((fovDeg * Math.PI / 180) / 2));
     this.mat.uniforms.uScale.value = s / this.group.scale.x;
-    this.mat.uniforms.uMax.value = Math.max(8, heightPx * 0.02);
+    this.mat.uniforms.uMax.value = Math.max(5, heightPx * 0.011);
   }
 }

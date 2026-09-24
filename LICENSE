@@ -27,6 +27,10 @@ SOFTWARE.
 - reference/  : Shiu et al. 2024 원본 모델 코드. MIT License,
                 Copyright (c) 2023 Philip Shiu and Nico Spiller. reference/shiu_LICENSE 참조.
 - web/vendor/ : three.js r169. MIT License, Copyright (c) 2010-2024 three.js authors.
+- web/assets/fly.glb, fly.parts.json
+              : TuragaLab/flybody 의 MuJoCo 성체 초파리 몸 모델에서 변환.
+                Apache License 2.0. 전문은 web/assets/flybody_LICENSE.txt,
+                변경 내역 고지는 web/assets/ATTRIBUTION.md 참조.
 
 이 저장소에 포함되지 않지만 실행에 필요한 데이터
 

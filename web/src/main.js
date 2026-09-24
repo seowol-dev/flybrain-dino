@@ -7,6 +7,7 @@ import { OutputPass } from '../vendor/OutputPass.js';
 import { loadRun } from './data.js';
 import { Brain } from './brain.js';
 import { makeFly, animateFly } from './fly.js';
+import { loadFly, animateFlyModel } from './fly_model.js';
 import { makeDesk } from './desk.js';
 import { drawSideView, drawFlyView } from './game2d.js';
 
@@ -27,25 +28,29 @@ const SHOW = [
     body: '생물 시간 1초 = 벽시계 1초. Apple M5 GPU 에서 프레임당 <b>12~15 ms</b> (예산 16.7 ms).' },
 ];
 
+// 파리 배치 — 모델 교체 시 여기만 만진다
+// 다리 끝이 책상면(y=-0.25)에 닿도록 맞춘 값이다
+const FLY = { scale: 2.15, pos: [-0.02, 0.03, -0.20], yaw: 0.05 };
+
 const state = {
   t: 0, playing: true, speed: 1, camIdx: 0, kiosk: false,
   lastJump: -9, capIdx: -1, camLerp: 0,
 };
 
 const CAMS = [
-  { pos: [1.95, 1.25, 3.05], tgt: [0.20, 0.32, -0.55], name: '전체' },
-  { pos: [0.05, 0.78, 1.30], tgt: [0.0, 0.34, -1.30], name: '파리 어깨너머' },
-  { pos: [3.05, 1.45, 0.95], tgt: [2.25, 0.96, -0.60], name: '뇌' },
-  { pos: [-1.45, 0.42, 0.55], tgt: [0.0, 0.14, -0.62], name: '파리 옆모습' },
-  { pos: [0.9, 0.34, 0.35], tgt: [0.0, 0.16, -0.55], name: '파리 클로즈업' },
+  { pos: [1.75, 1.05, 2.70], tgt: [0.15, 0.26, -0.75], name: '전체' },
+  { pos: [0.02, 0.62, 1.05], tgt: [0.0, 0.30, -1.45], name: '파리 어깨너머' },
+  { pos: [2.30, 2.05, -1.55], tgt: [1.08, 1.22, -2.40], name: '뇌' },
+  { pos: [-1.25, 0.34, 0.42], tgt: [0.0, 0.16, -0.18], name: '파리 옆모습' },
+  { pos: [0.62, 0.30, 0.72], tgt: [-0.02, 0.15, -0.16], name: '파리 클로즈업' },
 ];
 
 async function main() {
   const run = await loadRun();
   $('loadmsg').textContent = '장면 구성 중…';
-  $('nneu').textContent = run.meta.connectome.neurons.toLocaleString();
-  $('nsyn').textContent = run.meta.connectome.synapses.toLocaleString();
-  $('s_th').textContent = run.meta.threshold.toFixed(2);
+  $('n_neu').textContent = run.meta.connectome.neurons.toLocaleString();
+  $('n_syn').textContent = run.meta.connectome.synapses.toLocaleString();
+  $('g_mark').style.left = `${(1 / 2.4) * 100}%`;   // 임계선 위치 (막대 최대 = 임계×2.4)
 
   const canvas = $('gl');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -79,29 +84,40 @@ async function main() {
   scene.add(desk.group);
   const sctx = desk.canvas.getContext('2d');
 
-  // 초파리
-  const fly = makeFly();
-  fly.scale.setScalar(0.80);
-  fly.position.set(0, 0.055, -0.40);
+  // 초파리 — 실측 기반 모델(flybody). 실패하면 절차적 모델로 되돌린다.
+  let fly, animate;
+  try {
+    fly = await loadFly();
+    animate = animateFlyModel;
+    fly.scale.setScalar(FLY.scale);
+  } catch (e) {
+    console.warn('fly.glb 로드 실패, 절차적 모델 사용:', e);
+    fly = makeFly();
+    animate = animateFly;
+    fly.scale.setScalar(0.80);
+  }
+  fly.position.set(FLY.pos[0], FLY.pos[1], FLY.pos[2]);
+  fly.rotation.y = FLY.yaw;
+  fly.userData.baseY = FLY.pos[1];
   scene.add(fly);
 
   // 뇌 홀로그램
   const brain = new Brain(run, { scale: 1.0 });
-  brain.group.position.set(2.30, 0.98, -0.60);
-  brain.group.scale.setScalar(1.35);
+  brain.group.position.set(1.10, 1.22, -2.40);
+  brain.group.scale.setScalar(0.78);
   brain.group.rotation.y = -0.5;
   scene.add(brain.group);
   // 머리 → 뇌 연결선
   const linkGeo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0.04, 0.14, -0.52), new THREE.Vector3(1.20, 0.60, -0.56),
-    new THREE.Vector3(2.20, 0.90, -0.60)]);
+    new THREE.Vector3(0.12, 0.22, -0.46), new THREE.Vector3(0.70, 0.82, -1.48),
+    new THREE.Vector3(1.05, 1.15, -2.36)]);
   scene.add(new THREE.Line(linkGeo, new THREE.LineBasicMaterial({
     color: 0x3f7fb8, transparent: true, opacity: 0.12 })));
 
   // 포스트 프로세싱
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.58, 0.68, 0.72);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.42, 0.62, 0.86);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
@@ -131,7 +147,8 @@ async function main() {
     setTimeout(() => {
       if (i < 0) return;
       const sh = SHOW[i];
-      el.innerHTML = `<b>${sh.title}</b><br>${sh.body}`;
+      el.querySelector('h2').textContent = sh.title;
+      el.querySelector('p').innerHTML = sh.body;
       el.classList.add('on');
     }, i < 0 ? 0 : 320);
   }
@@ -163,7 +180,7 @@ async function main() {
 
     // 파리
     const vis = Math.min(1, (fr.rates?.F_pool ?? 0) / 25);
-    animateFly(fly, state.t, { jumpPulse: pulse, act: vis });
+    animate(fly, state.t, { jumpPulse: pulse, act: vis });
     desk.spaceKey.position.y = 0.038 - pulse * 0.02;
     desk.spaceKey.material.emissive.setHex(pulse > 0.15 ? 0x2a6f97 : 0x000000);
 
@@ -171,19 +188,22 @@ async function main() {
     brain.group.rotation.y += dt * 0.09;
 
     // HUD
-    $('s_t').textContent = state.t.toFixed(1) + ' s';
-    $('s_score').textContent = fr.score;
-    $('s_dist').textContent = fr.dist == null ? '–' : fr.dist.toFixed(2) + ' m';
-    $('s_theta').textContent = fr.theta.toFixed(1) + '°';
-    $('s_sig').textContent = (fr.sig ?? 0).toFixed(2);
-    $('s_sig').style.color = (fr.sig ?? 0) > run.meta.threshold ? 'var(--warn)' : '';
+    $('g_t').textContent = state.t.toFixed(1) + ' s';
+    $('g_score').textContent = fr.score;
+    $('g_dist').textContent = fr.dist == null ? '–' : fr.dist.toFixed(2) + ' m';
+    $('g_theta').innerHTML = fr.theta.toFixed(1) + '<small>°</small>';
+    const sig = fr.sig ?? 0;
+    $('g_sig').textContent = sig.toFixed(2);
+    const TH = run.meta.threshold, FULL = TH * 2.4;
+    $('g_fill').style.width = `${Math.max(0, Math.min(1, sig / FULL)) * 100}%`;
+    $('loom').classList.toggle('fire', sig > TH);
     if ((state.frameNo = (state.frameNo | 0) + 1) % 6 === 0) {
       let n = 0; for (let i = 0; i < brain.N; i++) if (brain.act[i] > 0.12) n++;
-      $('s_act').textContent = n.toLocaleString();
+      $('g_act').textContent = n.toLocaleString();
     }
-    $('s_jump').textContent = pulse > 0.1 ? '⬆︎ 도약' : '–';
-    $('s_jump').style.color = pulse > 0.1 ? 'var(--warn)' : '';
-    $('seek').value = String((state.t / DUR) * 100);
+    if (pulse > 0.1) $('g_cap').innerHTML = '<b style="color:var(--hot)">⬆︎ 도약 — 스페이스바</b>';
+    else if (state.frameNo % 30 === 0) $('g_cap').textContent = '임계를 넘으면 도약 — 실제 초파리의 도피 반사와 같은 자극이다.';
+    $('seek').value = String((state.t / DUR) * 1000);
 
     if (state.kiosk) {
       const k = showIndexAt(state.t);
@@ -206,7 +226,7 @@ async function main() {
     state.playing = !state.playing;
     $('play').textContent = state.playing ? '일시정지' : '재생';
   };
-  $('seek').oninput = (e) => { state.t = (+e.target.value / 100) * DUR; };
+  $('seek').oninput = (e) => { state.t = (+e.target.value / 1000) * DUR; };
   $('cam').onclick = () => {
     state.camIdx = (state.camIdx + 1) % CAMS.length;
     const c = CAMS[state.camIdx];

@@ -42,7 +42,7 @@ export function makeDesk({ screenW = 1024, screenH = 512 } = {}) {
 
   // 자판 — 파리 앞다리가 닿는 곳
   const kb = new THREE.Group();
-  kb.position.set(0, -0.228, -0.72);
+  kb.position.set(0, -0.228, -0.42);
   kb.rotation.x = -0.06;
   const kbBody = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.52),
     new THREE.MeshStandardMaterial({ color: 0x24262b, roughness: 0.6, metalness: 0.25 }));

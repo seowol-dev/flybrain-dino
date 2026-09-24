@@ -15,7 +15,7 @@ cd web && python3 -m http.server 8000     # http://localhost:8000
 | 점이 밝아지는 순간 | LIF 시뮬레이션에서 그 뉴런이 실제로 발화한 시점 (20 Hz 표본) |
 | 모니터의 게임 화면 | 폐회로 실행 중의 실제 게임 상태 |
 | 파리 시점 패널 | 광수용체에 투영된 장면을 같은 기하로 다시 그린 것 |
-| 초파리 3D 모델 | 절차적 모델. 비율과 배색은 실제 *D. melanogaster* 를 따랐지만 측정 데이터는 아니다 |
+| 초파리 3D 모델 | **TuragaLab/flybody** 의 해부학적 성체 *D. melanogaster* 몸 모델 (Apache-2.0). 날개 시맥·강모·부절 마디까지 실제 형태다. 출처와 변경 내역은 [`assets/ATTRIBUTION.md`](assets/ATTRIBUTION.md) |
 
 ## 조작
 
@@ -31,6 +31,16 @@ cd web && python3 -m http.server 8000     # http://localhost:8000
 
 ```
 https://<user>.github.io/<repo>/?kiosk=1
+```
+
+## 3D 모델 다시 만들기
+
+```bash
+git clone https://github.com/TuragaLab/flybody /tmp/flybody
+uv run python tools/build_fly_glb.py /tmp/flybody/flybody/fruitfly/assets /tmp/fly_raw.glb
+npx @gltf-transform/cli@4 weld /tmp/fly_raw.glb /tmp/fly_weld.glb
+npx @gltf-transform/cli@4 simplify /tmp/fly_weld.glb web/assets/fly.glb --ratio 0.30 --error 0.0002
+cp /tmp/fly_raw.parts.json web/assets/fly.parts.json
 ```
 
 ## 데이터 다시 만들기
