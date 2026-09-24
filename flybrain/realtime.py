@@ -22,6 +22,26 @@ from .lif import LIFParams
 from .config import PATHS
 from .retina import RetinaEncoder, load_eye_maps
 
+# T4/T5 의 '지연 가지' — 이 세포유형의 출력 시냅스는 느린 시냅스 풀로 보낸다.
+# 기본운동검출기(EMD)의 방향 선택성은 빠른 가지와 느린 가지를 비교해서 생긴다.
+#   T4 (ON) : 빠름 Mi1, Tm3    /  느림 Mi9(글루탐산), Mi4(GABA), CT1(GABA)
+#   T5 (OFF): 빠름 Tm1, Tm2    /  느림 Tm9(지속형), CT1
+# 근거: Arenz et al. 2017 (Curr Biol) — Mi9/Mi4 가 Mi1/Tm3 보다 느리다;
+#       Serbe et al. 2016 (Neuron) — Tm9 지속형, Tm1/Tm2 과도형;
+#       Meier & Borst 2019 (Curr Biol) — CT1 은 느린 GABA성 지연 가지.
+SLOW_TYPES: tuple[str, ...] = ("Mi9", "Mi4", "CT1", "Tm9")
+
+
+def slow_pre_mask(cx: Connectome, atlas: Atlas, types=SLOW_TYPES) -> np.ndarray:
+    """느린 시냅스 풀을 쓸 시냅스전 뉴런 마스크 (N,) bool."""
+    m = np.zeros(len(cx.neurons), bool)
+    for t in types:
+        idx = atlas.by_type(t)
+        if len(idx):
+            m[idx] = True
+    return m
+
+
 # 시각 경로 기본 기록 그룹 (이름 → cell_type)
 VISUAL_GROUPS: dict[str, tuple[str, ...]] = {
     "L1": ("L1",), "L2": ("L2",), "L3": ("L3",),
@@ -67,6 +87,7 @@ class VisualBrain:
     silence: tuple = ()
     eyes_used: tuple = ("left", "right")
     extra_groups: dict = field(default_factory=dict)
+    slow_types: tuple = SLOW_TYPES      # () 로 두면 모든 시냅스가 같은 시정수 (이전 동작)
 
     def __post_init__(self):
         from .lif_mlx import MLXLIFNetwork
@@ -77,7 +98,10 @@ class VisualBrain:
         all_eyes = load_eye_maps(self.cx, self.atlas)
         self.eyes = {s: all_eyes[s] for s in self.eyes_used}
         self.encoder = RetinaEncoder(self.eyes, **self.encoder_kwargs)
-        self.net = MLXLIFNetwork(weights(self.cx, self.preset), self.params, seed=self.seed)
+        self.slow_pre = (slow_pre_mask(self.cx, self.atlas, self.slow_types)
+                         if len(self.slow_types) else None)
+        self.net = MLXLIFNetwork(weights(self.cx, self.preset), self.params, seed=self.seed,
+                                 slow_pre=self.slow_pre)
         self.optic = np.flatnonzero((self.cx.neurons.super_class == "optic").fillna(False).to_numpy(bool))
         self.bias_mv = np.zeros(len(self.optic))
         if self.calibrate:
@@ -106,6 +130,19 @@ class VisualBrain:
         self._prev = np.zeros(len(flat), np.int64)
         self._step_debt = 0.0
 
+    def reset(self):
+        """시행 사이 초기화. net.reset() 만 부르면 안 된다 — 누적 발화수(cnt)는 0 으로
+        돌아가는데 _prev 는 이전 값을 들고 있어서 첫 프레임 발화율이 거대한 음수가 된다.
+        작동점 bias 와 인코더 순응 상태도 함께 되돌린다."""
+        self.net.reset()
+        if self.calibrate:
+            self.net.set_bias(self.optic, mv=self.bias_mv)
+        if len(self.silence):
+            self.net.silence(np.asarray(self.silence))
+        self.encoder.reset()
+        self._prev = np.zeros_like(self._prev)
+        self._step_debt = 0.0
+
     # -- 프레임 --------------------------------------------------------------
     def frame(self, lum: dict[str, np.ndarray], dt_s: float, eval_every: int = 64) -> dict[str, float]:
         """컬럼 휘도를 넣고 dt_s 만큼 생물시간을 진행한 뒤 그룹 평균 발화율(Hz)을 돌려준다."""
@@ -120,12 +157,11 @@ class VisualBrain:
 
     def _run_steps(self, n_steps: int, eval_every: int):
         net = self.net
-        net._ni = int(net._n_items.item())
         for k in range(n_steps):
             net._tick()
             if (k + 1) % eval_every == 0:
-                self._mx.eval(net.v, net.g, net.rfc, net.cnt, *net._ring)
-        self._mx.eval(net.v, net.g, net.rfc, net.cnt, *net._ring)
+                self._mx.eval(*net._state(), *net._ring)
+        self._mx.eval(*net._state(), *net._ring)
 
     def _read(self, dur_s: float) -> dict[str, float]:
         cnt = np.array(self._mx.take(self.net.cnt, self._gather)).astype(np.int64)
@@ -143,8 +179,11 @@ class VisualBrain:
 # ---------------------------------------------------------------------------
 def _bias_cache_path(vb: "VisualBrain") -> "object":
     e = vb.encoder
+    p = vb.params
+    slow = "-".join(vb.slow_types) if len(vb.slow_types) else "none"
     tag = (f"{vb.preset}_t{vb.target_hz:g}_b{e.r_base:g}_g{e.r_gain:g}_l{e.lum_ref:g}"
-           f"_e{''.join(x[0] for x in sorted(vb.eyes))}_s{vb.seed}")
+           f"_e{''.join(x[0] for x in sorted(vb.eyes))}_s{vb.seed}"
+           f"_ts{p.tau_slow:g}_ws{vb.net.w_slow:.4f}_sl{slow}")
     return PATHS["cache"] / f"optic_bias_{tag}.npy"
 
 
@@ -178,7 +217,6 @@ def calibrate_optic_bias(vb: "VisualBrain", n_iter: int = 60, window_ms: float =
     steps = int(round(window_ms / vb.params.dt))
     dur_s = window_ms * 1e-3
     prev = np.zeros(len(optic), np.int64)
-    net._ni = int(net._n_items.item())
     if verbose:
         print(f"[flybrain] 시각엽 작동점 보정 ({len(optic):,}개 뉴런 → {vb.target_hz:g} Hz, "
               f"{n_iter}회 × {window_ms:g} ms) ...", flush=True)
@@ -186,8 +224,8 @@ def calibrate_optic_bias(vb: "VisualBrain", n_iter: int = 60, window_ms: float =
         for k in range(steps):
             net._tick()
             if (k + 1) % 64 == 0:
-                mx.eval(net.v, net.g, net.rfc, net.cnt, *net._ring)
-        mx.eval(net.v, net.g, net.rfc, net.cnt, *net._ring)
+                mx.eval(*net._state(), *net._ring)
+        mx.eval(*net._state(), *net._ring)
         cnt = np.array(mx.take(net.cnt, gather)).astype(np.int64)
         r = (cnt - prev) / dur_s
         prev = cnt

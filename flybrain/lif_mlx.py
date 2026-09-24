@@ -43,20 +43,27 @@ _UPD_SRC = """
     uint i = thread_position_in_grid.x;
     uint n = (uint)ncount[0];
     if (i >= n) return;
-    // prm: 0 v_0, 1 v_rst, 2 v_th, 3 w_syn, 4 e_m, 5 e_s, 6 a
-    float v0 = prm[0], vr = prm[1], vth = prm[2], wsyn = prm[3], em = prm[4], es = prm[5], a = prm[6];
+    // prm: 0 v_0, 1 v_rst, 2 v_th, 3 w_syn, 4 e_m, 5 e_fast, 6 a_fast, 7 e_slow, 8 a_slow, 9 w_slow
+    float v0 = prm[0], vr = prm[1], vth = prm[2], wsyn = prm[3], em = prm[4];
+    float ef = prm[5], af = prm[6], esl = prm[7], asl = prm[8], wslow = prm[9];
     int rfc_steps = iprm[0];
     uint tick = (uint)iprm[1];
     uint seed = (uint)iprm[2];
     float v = v_in[i];
-    float g = g_in[i];
+    float gf = gf_in[i];
+    float gs = gs_in[i];
     int r = rfc_in[i];
     bool active = r <= 0;
     if (active) {
-        g += (float)acc[i] * wsyn + bias[i];
-        float A = g * a;
-        v = v0 + (v - v0 - A) * em + A * es;
-        g = g * es;
+        // 시냅스 풀 두 개를 각자의 시정수로 감쇠시키고 v 에 함께 넣는다.
+        // 지속 전류(bias)는 빠른 풀에 넣는다 (정상상태 g = bias mV).
+        gf += (float)accf[i] * wsyn + bias[i];
+        gs += (float)accs[i] * wslow;
+        float Af = gf * af;
+        float As = gs * asl;
+        v = v0 + (v - v0 - Af - As) * em + Af * ef + As * esl;
+        gf = gf * ef;
+        gs = gs * esl;
     }
     r -= 1;
     bool f = active && (v > vth);
@@ -70,13 +77,32 @@ _UPD_SRC = """
     }
     if (silenced[i] != 0) f = false;
     if (f) {
-        v = vr; g = 0.0f;
+        v = vr; gf = 0.0f; gs = 0.0f;
         r = (p > 0.0f) ? 0 : (rfc_steps - 1);
     }
-    v_out[i] = v; g_out[i] = g; rfc_out[i] = r;
+    v_out[i] = v; gf_out[i] = gf; gs_out[i] = gs; rfc_out[i] = r;
     fired_out[i] = f ? 1 : 0;
     cnt_out[i] = cnt_in[i] + (f ? 1 : 0);
 """
+
+
+def _build_items(indptr: np.ndarray, rows: np.ndarray, chunk: int):
+    """지정된 시냅스전 뉴런(rows=True)의 출력 시냅스를 chunk 개씩 쪼개 작업 항목으로 만든다.
+
+    반환: (item_pre int32, item_start int32, item_end int32) — post/wint 배열에 대한 범위.
+    """
+    n = len(indptr) - 1
+    deg = np.diff(indptr) * rows
+    nchunks = np.where(deg > 0, -(-deg // chunk), 0)
+    item_pre = np.repeat(np.arange(n, dtype=np.int32), nchunks)
+    if len(item_pre) == 0:
+        z = np.zeros(0, np.int32)
+        return z, z, z
+    first = np.repeat(np.cumsum(nchunks) - nchunks, nchunks)
+    part = np.arange(len(item_pre)) - first
+    start = indptr[item_pre] + part * chunk
+    end = np.minimum(start + chunk, indptr[item_pre + 1])
+    return item_pre, start.astype(np.int32), end.astype(np.int32)
 
 
 class MLXLIFNetwork:
@@ -87,7 +113,15 @@ class MLXLIFNetwork:
     """
 
     def __init__(self, W_pre: sp.csr_matrix, params: LIFParams | None = None, seed: int = 0,
-                 chunk: int = CHUNK):
+                 chunk: int = CHUNK, slow_pre: np.ndarray | None = None):
+        """slow_pre : (N,) bool — 이 시냅스전 뉴런의 출력 시냅스는 느린 풀(tau_slow)로 간다.
+
+        T4/T5 기본운동검출기의 방향 선택성은 입력 가지 사이의 **시간 필터 차이**에서
+        나온다(delay-and-compare). 실제로 Mi9/Mi4/CT1 은 느리고 Mi1/Tm3 는 빠르며,
+        T5 쪽은 Tm9 가 느리고 Tm1/Tm2 가 빠르다 (Arenz 2017; Serbe 2016; Meier & Borst 2019).
+        모든 뉴런이 같은 시정수를 쓰면 가중치만 다른 두 가지로는 방향 선택성이
+        원리적으로 만들어지지 않는다. 그래서 시냅스를 빠른 풀/느린 풀로 나눈다.
+        """
         self.p = params or LIFParams()
         p = self.p
         if p.stp_U > 0 or p.adapt_inc > 0:
@@ -99,29 +133,35 @@ class MLXLIFNetwork:
         self.n = W.shape[0]
         n = self.n
         indptr = W.indptr.astype(np.int64)
-        deg = np.diff(indptr)
-        nchunks = np.maximum(1, -(-deg // chunk))
-        nchunks[deg == 0] = 0
-        item_pre = np.repeat(np.arange(n, dtype=np.int32), nchunks)
-        first = np.repeat(np.cumsum(nchunks) - nchunks, nchunks)
-        part = np.arange(len(item_pre)) - first
-        start = indptr[item_pre] + part * chunk
-        end = np.minimum(start + chunk, indptr[item_pre + 1])
-        self._item_pre = mx.array(item_pre)
-        self._item_start = mx.array(start.astype(np.int32))
-        self._item_end = mx.array(end.astype(np.int32))
-        self._n_items = mx.array(np.array([len(item_pre)], np.int32))
+        # post/wint 는 두 풀이 공유한다 (행이 서로 배타적이므로 범위만 나눠 주면 된다)
         self._post = mx.array(W.indices.astype(np.int32))
         self._wint = mx.array(np.round(W.data).astype(np.int32))
         self._ncount = mx.array(np.array([n], np.int32))
         self._W_host = W
 
+        slow = np.zeros(n, bool) if slow_pre is None else np.asarray(slow_pre, bool)
+        if slow.shape != (n,):
+            raise ValueError(f"slow_pre 는 ({n},) bool 이어야 합니다")
+        self.slow_pre = slow
+        self._pool = [_build_items(indptr, ~slow, chunk), _build_items(indptr, slow, chunk)]
+        self._pool_mx = [
+            (mx.array(ip), mx.array(st), mx.array(en), mx.array(np.array([len(ip)], np.int32)), len(ip))
+            for ip, st, en in self._pool
+        ]
+
         self.delay_steps = max(1, int(round(p.t_dly / p.dt)))
         self.rfc_steps = int(round(p.t_rfc / p.dt))
         e_m = np.exp(-p.dt / p.t_mbr)
-        e_s = np.exp(-p.dt / p.tau)
-        a = p.tau / (p.tau - p.t_mbr)
-        self._prm = mx.array(np.array([p.v_0, p.v_rst, p.v_th, p.w_syn, e_m, e_s, a], np.float32))
+        if abs(p.tau - p.t_mbr) < 1e-9 or abs(p.tau_slow - p.t_mbr) < 1e-9:
+            raise ValueError("시냅스 시정수가 막 시정수와 같으면 정확해가 특이점이 됩니다")
+        e_f = np.exp(-p.dt / p.tau)
+        a_f = p.tau / (p.tau - p.t_mbr)
+        e_sl = np.exp(-p.dt / p.tau_slow)
+        a_sl = p.tau_slow / (p.tau_slow - p.t_mbr)
+        scale = (p.tau / p.tau_slow) if p.w_slow_scale is None else p.w_slow_scale
+        self.w_slow = p.w_syn * scale
+        self._prm = mx.array(np.array([p.v_0, p.v_rst, p.v_th, p.w_syn, e_m,
+                                       e_f, a_f, e_sl, a_sl, self.w_slow], np.float32))
         self.seed = int(seed) & 0x7FFFFFFF
 
         self._prop = mx.fast.metal_kernel(
@@ -129,9 +169,9 @@ class MLXLIFNetwork:
             output_names=["acc"], source=_PROP_SRC, atomic_outputs=True)
         self._upd = mx.fast.metal_kernel(
             name="fly_update",
-            input_names=["ncount", "prm", "iprm", "v_in", "g_in", "rfc_in", "acc", "stim_p", "bias", "silenced",
-                         "cnt_in"],
-            output_names=["v_out", "g_out", "rfc_out", "fired_out", "cnt_out"],
+            input_names=["ncount", "prm", "iprm", "v_in", "gf_in", "gs_in", "rfc_in", "accf", "accs",
+                         "stim_p", "bias", "silenced", "cnt_in"],
+            output_names=["v_out", "gf_out", "gs_out", "rfc_out", "fired_out", "cnt_out"],
             source=_UPD_SRC, header=_HEADER)
         self._silenced_np = np.zeros(n, np.int32)
         self._stim_np = np.zeros(n, np.float32)
@@ -142,7 +182,8 @@ class MLXLIFNetwork:
     def reset(self):
         n = self.n
         self.v = mx.full((n,), self.p.v_0, dtype=mx.float32)
-        self.g = mx.zeros((n,), dtype=mx.float32)
+        self.gf = mx.zeros((n,), dtype=mx.float32)   # 빠른 시냅스 풀
+        self.gs = mx.zeros((n,), dtype=mx.float32)   # 느린 시냅스 풀
         self.rfc = mx.zeros((n,), dtype=mx.int32)
         self.cnt = mx.zeros((n,), dtype=mx.int32)
         zero = mx.zeros((n,), dtype=mx.uint8)
@@ -152,7 +193,8 @@ class MLXLIFNetwork:
         self._bias = mx.array(self._bias_np)
         self._sil = mx.array(self._silenced_np)
         self._marks: dict = {}
-        mx.eval(self.v, self.g, self.rfc, self.cnt, zero)
+        self._zero_acc = mx.zeros((n,), dtype=mx.int32)
+        mx.eval(self.v, self.gf, self.gs, self.rfc, self.cnt, zero, self._zero_acc)
 
     @property
     def t_ms(self) -> float:
@@ -206,37 +248,46 @@ class MLXLIFNetwork:
         self._bias = mx.array(self._bias_np)
 
     # -- 적분 ----------------------------------------------------------------
+    def _propagate(self, pool: int, fired_old):
+        """풀 pool 의 시냅스만 전달. 비어 있으면 0 배열."""
+        ip, st, en, cnt, n_items = self._pool_mx[pool]
+        if n_items == 0:
+            return self._zero_acc
+        return self._prop(
+            inputs=[cnt, ip, st, en, self._post, self._wint, fired_old],
+            grid=(n_items, 1, 1), threadgroup=(256, 1, 1),
+            output_shapes=[(self.n,)], output_dtypes=[mx.int32], init_value=0,
+        )[0]
+
     def _tick(self):
         L = len(self._ring)
         fired_old = self._ring[(self.step_i - self.delay_steps) % L]
-        acc = self._prop(
-            inputs=[self._n_items, self._item_pre, self._item_start, self._item_end, self._post, self._wint, fired_old],
-            grid=(int(self._n_items.item()) if not hasattr(self, "_ni") else self._ni, 1, 1),
-            threadgroup=(256, 1, 1), output_shapes=[(self.n,)], output_dtypes=[mx.int32], init_value=0,
-        )[0]
+        accf = self._propagate(0, fired_old)
+        accs = self._propagate(1, fired_old)
         iprm = mx.array(np.array([self.rfc_steps, self.step_i, self.seed], np.int32))
-        v, g, rfc, fired, cnt = self._upd(
-            inputs=[self._ncount, self._prm, iprm, self.v, self.g, self.rfc, acc, self._stim, self._bias,
-                    self._sil, self.cnt],
+        v, gf, gs, rfc, fired, cnt = self._upd(
+            inputs=[self._ncount, self._prm, iprm, self.v, self.gf, self.gs, self.rfc,
+                    accf, accs, self._stim, self._bias, self._sil, self.cnt],
             grid=(self.n, 1, 1), threadgroup=(256, 1, 1),
-            output_shapes=[(self.n,)] * 5,
-            output_dtypes=[mx.float32, mx.float32, mx.int32, mx.uint8, mx.int32],
+            output_shapes=[(self.n,)] * 6,
+            output_dtypes=[mx.float32, mx.float32, mx.float32, mx.int32, mx.uint8, mx.int32],
         )
-        self.v, self.g, self.rfc, self.cnt = v, g, rfc, cnt
+        self.v, self.gf, self.gs, self.rfc, self.cnt = v, gf, gs, rfc, cnt
         self._ring[self.step_i % L] = fired
         self.step_i += 1
 
+    def _state(self):
+        return (self.v, self.gf, self.gs, self.rfc, self.cnt)
+
     def run(self, duration_ms: float, progress: bool = False, eval_every: int = 64):
-        self._ni = int(self._n_items.item())
         n_steps = int(round(duration_ms / self.p.dt))
         for k in range(n_steps):
             self._tick()
             if (k + 1) % eval_every == 0:
-                mx.eval(self.v, self.g, self.rfc, self.cnt, *self._ring)
-        mx.eval(self.v, self.g, self.rfc, self.cnt, *self._ring)
+                mx.eval(*self._state(), *self._ring)
+        mx.eval(*self._state(), *self._ring)
 
     def step(self):
-        self._ni = int(self._n_items.item())
         self._tick()
 
     # -- 기록 ----------------------------------------------------------------

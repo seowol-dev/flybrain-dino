@@ -136,6 +136,99 @@ def build_eye_map(cx: Connectome, atlas: Atlas, side: str, *, flip_az: bool = Tr
                   sphere_r=r, resid_um=resid, n_pr_total=len(R))
 
 
+def map_frame(cx: Connectome, atlas: Atlas, side: str):
+    """build_eye_map 과 같은 구면/축 기준을 다시 만들어 임의 뉴런을 지도 좌표로 투영한다.
+
+    반환: project(idx) -> (n, 2) 배열 [방위각, 고도] (도). soma 좌표가 없는 뉴런은 NaN.
+    T4/T5, Tm, LPLC 같은 뉴런의 수용장 위치를 알아야 할 때 쓴다(컬럼 배정이 없으므로
+    세포체 위치를 같은 투영으로 넘긴다 — 세포유형별 깊이 차이는 방사 방향이라
+    (방위각, 고도) 에는 거의 영향이 없다).
+    """
+    M = atlas.by_type("Mi1", side)
+    soma = cx.neurons[["soma_x", "soma_y", "soma_z"]].to_numpy(float) * VOXEL_UM
+    ok = np.isfinite(soma).all(axis=1)
+    c, _ = _sphere_fit(soma[M[ok[M]]])
+    u0 = soma[M[ok[M]]] - c
+    u0 /= np.linalg.norm(u0, axis=1)[:, None]
+    m = _unit(u0.mean(0))
+    e_el = _unit(DORSAL - (DORSAL @ m) * m)
+    e_az = ANTERIOR - (ANTERIOR @ m) * m
+    e_az = _unit(e_az - (e_az @ e_el) * e_el)
+
+    def project(idx, flip_az: bool = True, flip_el: bool = False):
+        idx = np.asarray(idx, np.int64)
+        out = np.full((len(idx), 2), np.nan)
+        good = ok[idx]
+        if not good.any():
+            return out
+        p = soma[idx[good]] - c
+        u = p / np.linalg.norm(p, axis=1)[:, None]
+        x, y, z = u @ m, u @ e_az, u @ e_el
+        th = np.degrees(np.arccos(np.clip(x, -1, 1)))
+        ph = np.arctan2(z, y)
+        out[good, 0] = th * np.cos(ph) * (-1 if flip_az else 1)
+        out[good, 1] = th * np.sin(ph) * (-1 if flip_el else 1)
+        return out
+
+    return project
+
+
+def retinotopic_positions(cx: Connectome, atlas: Atlas, eye: EyeMap, *, max_hops: int = 2,
+                          min_syn: int = 3) -> np.ndarray:
+    """모든 뉴런에 망막지도 좌표 (방위각, 고도) 를 연결로 배정한다. (N, 2), 미배정은 NaN.
+
+    Mi1 은 컬럼당 1개이고 위치가 이미 있다(EyeMap). 거기서 시냅스 수 가중 평균으로
+    한 홉씩 퍼뜨린다. 세포체 위치로 투영하는 방법은 세포유형마다 껍질 반지름이 달라
+    각도 규모가 어긋나므로(라미나 vs 메둘라) 쓰지 않는다.
+    """
+    N = len(cx.neurons)
+    pos = np.full((N, 2), np.nan)
+    pos[eye.col_idx, 0] = eye.col_az
+    pos[eye.col_idx, 1] = eye.col_el
+    W = abs(cx.W_pre).tocsr()
+    W.data[W.data < min_syn] = 0
+    W.eliminate_zeros()
+    Wsym = (W + W.T).tocsr()          # 방향 무관하게 같은 컬럼 이웃을 찾는다
+    for _ in range(max_hops):
+        known = np.isfinite(pos[:, 0])
+        src = np.where(known[:, None], np.nan_to_num(pos), 0.0)
+        wk = Wsym @ known.astype(np.float64)               # 알려진 이웃으로의 시냅스 합
+        acc = Wsym @ src                                    # 가중 좌표 합
+        new = (~known) & (wk > 0)
+        if not new.any():
+            break
+        pos[new] = acc[new] / wk[new, None]
+    return pos
+
+
+def frontal_groups(cx: Connectome, atlas: Atlas, types, radius_deg: float = 18.0,
+                   eyes: dict | None = None, pos: np.ndarray | None = None,
+                   inner_deg: float = 0.0, prefix: str = "F") -> dict[str, np.ndarray]:
+    """세포유형별로 '지도 중심 radius_deg 안을 보는' 뉴런만 골라 그룹을 만든다.
+
+    작은 물체의 루밍은 시야 전체 평균에서 묻힌다(선인장 각반너비 4° 면 컬럼의 약 2%).
+    충돌 경로에 해당하는 중심 수용장만 읽으면 신호가 살아난다. 실제 초파리의 도피
+    반응도 정면 루밍에 가장 강하다.
+
+    inner_deg 를 주면 고리(annulus) 가 된다 — 중심 대비 주변을 재서 전역 밝기 변화를
+    상쇄하는 중심-주변(center-surround) 비교를 만들 수 있다.
+    """
+    eyes = eyes or load_eye_maps(cx, atlas)
+    out: dict[str, list] = {}
+    for side, eye in eyes.items():
+        p = retinotopic_positions(cx, atlas, eye) if pos is None else pos
+        for t in types:
+            idx = atlas.by_type(t, side)
+            if not len(idx):
+                continue
+            q = p[idx]
+            d = np.hypot(q[:, 0], q[:, 1])
+            keep = np.isfinite(q).all(axis=1) & (d <= radius_deg) & (d >= inner_deg)
+            if keep.any():
+                out.setdefault(f"{prefix}_{t}", []).append(idx[keep])
+    return {k: np.concatenate(v) for k, v in out.items()}
+
+
 def _cache_path(flip_az: bool, flip_el: bool):
     return PATHS["cache"] / f"retina_783_az{int(flip_az)}_el{int(flip_el)}.npz"
 

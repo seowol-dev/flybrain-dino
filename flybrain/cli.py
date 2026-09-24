@@ -6,6 +6,8 @@
   flybrain validate                      Shiu et al. 2024 핵심 결과(당 GRN → MN9) 재현 확인
   flybrain activate --group sugar --side left [--silence-type ...]   개방회로 활성화 실험
   flybrain run feeding --duration 20     가상 세계 폐회로 실험 (시나리오: feeding, odor, wind, looming, touch, thermal)
+  flybrain dino --duration 30            크롬 공룡게임 실시간 폐회로 (시각 → 도약)
+  flybrain dino --trials 6 --controls    대조군 포함 배터리 (맹목 / R1-6 침묵)
 """
 from __future__ import annotations
 
@@ -111,6 +113,76 @@ def cmd_validate(a):
     sys.exit(0 if ok else 1)
 
 
+def cmd_dino(a):
+    """크롬 공룡게임 실시간 폐회로. 대조군까지 한 번에 돌릴 수 있다."""
+    import pandas as pd
+
+    from .atlas import Atlas
+    from .data import load_connectome
+    from .dino import LAMINA_READ, OFF_GROUPS, ON_GROUPS, LoomDecoder
+    from .dino_replay import write_dino_replay
+    from .dino_run import run_dino
+    from .realtime import VisualBrain
+    from .retina import frontal_groups, load_eye_maps
+
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    cx = load_connectome()
+    atlas = Atlas(cx)
+    eyes = load_eye_maps(cx, atlas)
+    types = tuple(dict.fromkeys(ON_GROUPS + OFF_GROUPS))
+    fg = frontal_groups(cx, atlas, types, radius_deg=a.frontal_deg, eyes=eyes, prefix="F")
+    fg.update(frontal_groups(cx, atlas, LAMINA_READ, radius_deg=75.0, inner_deg=35.0,
+                             eyes=eyes, prefix="S"))
+    for pre in ("F", "S"):
+        parts = [v for k, v in fg.items() if k.startswith(pre + "_") and k[2:] in LAMINA_READ]
+        if parts:
+            fg[f"{pre}_pool"] = np.unique(np.concatenate(parts))
+
+    conds = [("정상(시각)", dict(blind=False), ())]
+    if a.controls:
+        conds += [("맹목(대조)", dict(blind=True), ()), ("R1-6 침묵(대조)", dict(blind=False), ("R1-6",))]
+    elif a.blind:
+        conds = [("맹목(대조)", dict(blind=True), ())]
+    if a.silence_type:
+        conds = [(f"{'+'.join(a.silence_type)} 침묵", dict(blind=a.blind), tuple(a.silence_type))]
+
+    brains: dict[tuple, VisualBrain] = {}
+    rows, first = [], None
+    for label, kw, sil_types in conds:
+        key = sil_types
+        if key not in brains:
+            sil = tuple(np.concatenate([atlas.by_type(t) for t in sil_types]).tolist()) if sil_types else ()
+            brains[key] = VisualBrain(cx=cx, target_hz=a.target_hz, seed=a.seed, silence=sil, extra_groups=fg)
+        vb = brains[key]
+        for k in range(a.trials):
+            seed = a.seed + k
+            vb.reset()
+            dec = LoomDecoder(threshold=a.threshold, tau_fast_s=a.tau_fast)
+            df, st = run_dino(duration_s=a.duration, decoder=dec, realtime=not a.no_realtime,
+                              brain=vb, seed=seed, frontal_deg=a.frontal_deg, verbose=False, **kw)
+            print(f"[{label}] seed={seed} 생존 {st['survived_s']:.2f}s · 선인장 {st['score']}개 · "
+                  f"도약 {st['jumps']}회 · {'충돌' if st['dead'] else '완주'}")
+            rows.append(dict(cond=label, seed=seed, **{c: st[c] for c in
+                        ("survived_s", "score", "jumps", "dead", "work_p50_ms", "work_p95_ms", "realtime_ok")}))
+            if first is None:
+                first = (df, st)
+    res = pd.DataFrame(rows)
+    res.to_csv(out / f"{a.name}_trials.csv", index=False)
+    if len(conds) > 1 or a.trials > 1:
+        g = res.groupby("cond").agg(생존s=("survived_s", "mean"), 점수평균=("score", "mean"),
+                                    점수합=("score", "sum"), 완주=("dead", lambda x: int((~x).sum())),
+                                    n=("seed", "size"))
+        print()
+        print(g.to_string())
+    df, st = first
+    df.drop(columns=["cacti"], errors="ignore").to_csv(out / f"{a.name}_trajectory.csv", index=False)
+    html = write_dino_replay(df, st, out / f"{a.name}.html", threshold=a.threshold)
+    print(f"\n저장: {out / (a.name + '_trials.csv')}\n      {out / (a.name + '_trajectory.csv')}\n      {html}")
+    print(f"프레임 작업 p50 {st['work_p50_ms']:.1f} / p95 {st['work_p95_ms']:.1f} ms "
+          f"(예산 {st['budget_ms']} ms) · 실시간 {'유지' if st['realtime_ok'] else '실패'}")
+
+
 def cmd_run(a):
     from .experiment import ClosedLoopExperiment
     from .plots import report
@@ -192,6 +264,22 @@ def main(argv=None):
     s.add_argument("--name", default="")
     s.add_argument("--out", default=str(PATHS["results"]))
     s.set_defaults(fn=cmd_run)
+
+    s = sub.add_parser("dino", help="크롬 공룡게임 실시간 폐회로")
+    s.add_argument("--duration", type=float, default=30.0, help="생물 시간(초)")
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--trials", type=int, default=1, help="시행 수 (seed 를 0..N-1 로)")
+    s.add_argument("--threshold", type=float, default=1.8, help="도약 임계값 (루밍 지표)")
+    s.add_argument("--tau-fast", type=float, default=0.06, help="지표 평활 시정수(초)")
+    s.add_argument("--frontal-deg", type=float, default=25.0, help="중심 수용장 반경(도)")
+    s.add_argument("--target-hz", type=float, default=10.0, help="시엽 작동점 목표 발화율")
+    s.add_argument("--blind", action="store_true", help="대조군: 게임은 돌지만 균일 회색만 보여 준다")
+    s.add_argument("--silence-type", action="append", default=[], help="끌 세포유형 (예: R1-6)")
+    s.add_argument("--controls", action="store_true", help="정상/맹목/R1-6 침묵 세 조건을 모두 돌린다")
+    s.add_argument("--no-realtime", action="store_true", help="벽시계에 맞추지 않고 최대 속도로")
+    s.add_argument("--name", default="dino")
+    s.add_argument("--out", default=str(PATHS["results"]))
+    s.set_defaults(fn=cmd_dino)
 
     a = p.parse_args(argv)
     a.fn(a)

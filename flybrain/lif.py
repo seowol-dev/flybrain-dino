@@ -27,7 +27,11 @@ class LIFParams:
     v_rst: float = -52.0    # mV, 리셋 전위
     v_th: float = -45.0     # mV, 역치
     t_mbr: float = 20.0     # ms, 막 시정수
-    tau: float = 5.0        # ms, 시냅스 시정수
+    tau: float = 5.0        # ms, 시냅스 시정수 (빠른 풀)
+    tau_slow: float = 60.0  # ms, 느린 시냅스 풀 시정수 (Mi9/Mi4/CT1/Tm9 등 지연 가지)
+    # 느린 풀의 가중치 배율. None 이면 tau/tau_slow (전하량 보존: 총 시냅스 전류의
+    # 적분을 빠른 풀과 같게 두고 '세기는 같고 느리기만' 하도록 만든다). 1.0 이면 보존 안 함.
+    w_slow_scale: float | None = None
     t_rfc: float = 2.2      # ms, 불응기
     t_dly: float = 1.8      # ms, 시냅스 지연
     w_syn: float = 0.275    # mV, 시냅스 1개당 가중치
