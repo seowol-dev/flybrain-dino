@@ -42,7 +42,7 @@ export function makeDesk({ screenW = 1024, screenH = 512 } = {}) {
 
   // 자판 — 파리 앞다리가 닿는 곳
   const kb = new THREE.Group();
-  kb.position.set(0, -0.228, -0.42);
+  kb.position.set(0, -0.228, -0.62);
   kb.rotation.x = -0.06;
   const kbBody = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.52),
     new THREE.MeshStandardMaterial({ color: 0x24262b, roughness: 0.6, metalness: 0.25 }));
@@ -63,5 +63,14 @@ export function makeDesk({ screenW = 1024, screenH = 512 } = {}) {
   kb.add(space);
   g.add(kb);
 
-  return { group: g, canvas, tex, screen, monitor: mon, keyboard: kb, spaceKey: space, keys };
+  // IK 가 발끝을 올려놓을 표면 정보 (월드 좌표)
+  const deskTopY = top.position.y + 0.05;
+  const kbTopY = kb.position.y + 0.038 + 0.015;          // 자판 키 윗면
+  const surfaces = {
+    deskY: deskTopY,
+    kbY: kbTopY,
+    kb: { x0: -0.75, x1: 0.75, z0: kb.position.z - 0.26, z1: kb.position.z + 0.26 },
+    space: { x0: -0.31, x1: 0.31, z: kb.position.z + 0.20, y: kbTopY },
+  };
+  return { group: g, canvas, tex, screen, monitor: mon, keyboard: kb, spaceKey: space, keys, surfaces };
 }

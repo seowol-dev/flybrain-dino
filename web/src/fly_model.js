@@ -170,18 +170,5 @@ export function animateFlyModel(fly, t, { jumpPulse = 0, act = 0 } = {}) {
     const w = g(`wing_${s}`);
     if (w) { w.rotation.z = sign * flap; w.rotation.y = sign * flap * 0.35; }
   }
-  // 앞다리(T1): 자판 누르기
-  for (const s of ['left', 'right']) {
-    const press = jumpPulse * 0.55 + Math.max(0, Math.sin(t * 2.6 + (s === 'left' ? 0 : 1.1))) * 0.025;
-    const fe = g(`femur_T1_${s}`), ti = g(`tibia_T1_${s}`);
-    if (fe) fe.rotation.x = press * 0.45;
-    if (ti) ti.rotation.x = -press * 0.9;
-  }
-  // 나머지 다리는 아주 약하게 흔들어 살아 있는 느낌만
-  for (const T of ['T2', 'T3']) {
-    for (const s of ['left', 'right']) {
-      const ti = g(`tibia_${T}_${s}`);
-      if (ti) ti.rotation.x = Math.sin(t * 1.15 + (T === 'T2' ? 0 : 0.8)) * 0.02;
-    }
-  }
+  // 다리는 IK(ik.js)가 담당한다 — 여기서 건드리면 충돌한다.
 }

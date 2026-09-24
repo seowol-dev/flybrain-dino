@@ -34,6 +34,20 @@ cd web && python3 -m http.server 8000     # http://localhost:8000
 https://<user>.github.io/<repo>/?kiosk=1
 ```
 
+## 다리 IK
+
+`src/ik.js` 가 여섯 다리를 CCD(Cyclic Coordinate Descent)로 푼다. 발끝을 책상·자판에
+고정해 두고 관절을 역으로 맞추므로, 몸통이 흔들려도 발이 미끄러지지 않는다.
+
+- 체인: `coxa → femur → tibia → tarsus`, 말단은 `claw` (모델의 실제 관절 계층)
+- 관절마다 기준 자세에서 벗어나는 각을 제한해 다리가 뒤집히지 않게 한다
+- 도약 순간 앞다리 목표점이 내려가 **스페이스바를 실제로 눌러 내린다**
+
+three.js 의 `CCDIKSolver` 는 SkinnedMesh + Bone 전용이라 쓸 수 없었다
+(이 모델은 glTF 노드를 Group 계층으로 재구성한 것이다).
+
+실측: 목표까지 잔차 0.0001~0.0004, 몸통이 0.0031 움직이는 동안 발끝 이동 0.0002~0.0009.
+
 ## 표면 질감을 어떻게 만들었나
 
 이 모델에는 UV 가 없어서 이미지 텍스처를 입힐 수 없다. 대신 `src/fly_detail.js` 가

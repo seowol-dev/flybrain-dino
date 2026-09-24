@@ -8,6 +8,7 @@ import { loadRun } from './data.js';
 import { Brain } from './brain.js';
 import { makeFly, animateFly } from './fly.js';
 import { loadFly, animateFlyModel } from './fly_model.js';
+import { buildLegIK } from './ik.js';
 import { makeDesk } from './desk.js';
 import { drawSideView, drawFlyView } from './game2d.js';
 
@@ -30,7 +31,8 @@ const SHOW = [
 
 // 파리 배치 — 모델 교체 시 여기만 만진다
 // 다리 끝이 책상면(y=-0.25)에 닿도록 맞춘 값이다
-const FLY = { scale: 2.15, pos: [-0.02, 0.03, -0.20], yaw: 0.05 };
+// 몸길이 0.294, 날개폭 0.612, 높이 0.208 (실측). 다리 끝이 책상면에 닿도록 y 를 잡는다.
+const FLY = { scale: 2.60, pos: [0.0, 0.145, -0.16], yaw: 0.04 };
 
 const state = {
   t: 0, playing: true, speed: 1, camIdx: 0, kiosk: false,
@@ -38,11 +40,11 @@ const state = {
 };
 
 const CAMS = [
-  { pos: [1.75, 1.05, 2.70], tgt: [0.15, 0.26, -0.75], name: '전체' },
-  { pos: [0.02, 0.62, 1.05], tgt: [0.0, 0.30, -1.45], name: '파리 어깨너머' },
+  { pos: [1.70, 0.92, 2.55], tgt: [0.10, 0.10, -0.70], name: '전체' },
+  { pos: [0.03, 0.36, 0.95], tgt: [0.0, 0.08, -1.50], name: '파리 어깨너머' },
   { pos: [2.30, 2.05, -1.55], tgt: [1.08, 1.22, -2.40], name: '뇌' },
-  { pos: [-1.25, 0.34, 0.42], tgt: [0.0, 0.16, -0.18], name: '파리 옆모습' },
-  { pos: [0.62, 0.30, 0.72], tgt: [-0.02, 0.15, -0.16], name: '파리 클로즈업' },
+  { pos: [-1.30, 0.16, -0.16], tgt: [0.0, 0.02, -0.16], name: '파리 옆모습' },
+  { pos: [-0.62, 0.22, 0.34], tgt: [-0.10, -0.06, -0.32], name: '앞다리와 스페이스바' },
 ];
 
 async function main() {
@@ -100,6 +102,31 @@ async function main() {
   fly.rotation.y = FLY.yaw;
   fly.userData.baseY = FLY.pos[1];
   scene.add(fly);
+
+  // ── 다리 IK ────────────────────────────────────────────────────────────
+  // 발끝을 책상·자판에 고정한다. 몸통이 흔들려도 발이 미끄러지지 않고,
+  // 앞다리는 도약 순간 스페이스바를 실제로 눌러 내린다.
+  let legs = [];
+  if (fly.userData.groups) {
+    fly.updateMatrixWorld(true);
+    legs = buildLegIK(fly);
+    const S = desk.surfaces;
+    for (const leg of legs) {
+      leg.solver.tipWorld(leg.rest);
+      const inKb = leg.rest.x > S.kb.x0 && leg.rest.x < S.kb.x1
+                && leg.rest.z > S.kb.z0 && leg.rest.z < S.kb.z1;
+      leg.target.copy(leg.rest);
+      leg.target.y = inKb ? S.kbY : S.deskY;
+      if (leg.isFront) {
+        // 앞다리는 스페이스바 위에 얹는다. 자연스러운 x 는 그대로 두고 z 만 맞춘다
+        // (억지로 모으면 IK 가 다리를 비틀어 어색해진다).
+        const x = Math.max(S.space.x0 + 0.03, Math.min(S.space.x1 - 0.03, leg.rest.x));
+        leg.target.set(x, S.space.y, S.space.z);
+      }
+      leg.home = leg.target.clone();
+    }
+    window.__legs = legs;
+  }
 
   // 뇌 홀로그램
   const brain = new Brain(run, { scale: 1.0 });
@@ -181,6 +208,15 @@ async function main() {
     // 파리
     const vis = Math.min(1, (fr.rates?.F_pool ?? 0) / 25);
     animate(fly, state.t, { jumpPulse: pulse, act: vis });
+    // 몸통이 움직인 뒤에 IK 를 푼다 (발끝은 그 자리에 남는다)
+    if (legs.length) {
+      fly.updateMatrixWorld(true);
+      for (const leg of legs) {
+        leg.target.copy(leg.home);
+        if (leg.isFront) leg.target.y -= pulse * 0.016;     // 스페이스바를 누른다
+        leg.solver.solve(leg.target);
+      }
+    }
     desk.spaceKey.position.y = 0.038 - pulse * 0.02;
     desk.spaceKey.material.emissive.setHex(pulse > 0.15 ? 0x2a6f97 : 0x000000);
 

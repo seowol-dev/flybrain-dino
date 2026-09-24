@@ -134,15 +134,53 @@ def parse(asset_dir: Path, xml_name: str = "fruitfly.xml", root_matrix: np.ndarr
     return scene, bodies, stats
 
 
+def _centroid(scene, bodies, name: str) -> np.ndarray:
+    """바디에 붙은 모든 geom 정점의 평균 위치 (월드)."""
+    pts = []
+    for gn in bodies.get(name, {}).get("geoms", []):
+        g = scene.geometry.get(gn)
+        if g is not None:
+            pts.append(np.asarray(g.vertices).mean(axis=0))
+    if not pts:
+        raise KeyError(f"{name} 의 geom 을 찾을 수 없습니다")
+    return np.mean(pts, axis=0)
+
+
+def _anatomical_frame(scene, bodies) -> np.ndarray:
+    """머리·날개 위치에서 앞/위/오른쪽 축을 유도해 three.js 기준 회전을 만든다."""
+    head = _centroid(scene, bodies, "head")
+    thorax = _centroid(scene, bodies, "thorax")
+    wl = _centroid(scene, bodies, "wing_left")
+    wr = _centroid(scene, bodies, "wing_right")
+    fwd = head - thorax
+    fwd /= np.linalg.norm(fwd)
+    left = wl - wr
+    left -= fwd * (left @ fwd)                    # 앞축에 직교화
+    left /= np.linalg.norm(left)
+    up = np.cross(fwd, left)                      # 오른손계: fwd × left = up
+    up /= np.linalg.norm(up)
+    # three.js 기저: +x 오른쪽(=-left), +y 위, +z 뒤(=-fwd)
+    R = np.eye(4)
+    R[:3, :3] = np.vstack([-left, up, -fwd])
+    det = np.linalg.det(R[:3, :3])
+    assert abs(det - 1.0) < 1e-6, f"회전이 아님 (det={det:.4f})"
+    print(f"해부 축: 앞={np.round(fwd,3)} 왼쪽={np.round(left,3)} 위={np.round(up,3)}")
+    return R
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("assets", type=Path)
     ap.add_argument("out", type=Path)
     ap.add_argument("--xml", default="fruitfly.xml")
     a = ap.parse_args()
-    # MuJoCo(+x 앞, +z 위) → three.js(+y 위, 앞은 -z). 최상위 바디에 미리 곱한다.
-    rot = trimesh.transformations.euler_matrix(-np.pi / 2, 0, np.pi / 2, "sxyz")
-    scene, bodies, stats = parse(a.assets, a.xml, root_matrix=rot)
+    # 좌표계 변환은 **해부 구조에서 유도**한다.
+    # XML 의 body pos 는 관절 오프셋일 뿐이고 실제 위치는 geom 에 들어 있어서,
+    # 트리만 보고 앞/위/옆 축을 정하면 틀린다(실제로 두 번 틀렸다).
+    # 머리-흉부 벡터로 '앞', 좌우 날개 벡터로 '왼쪽'을 잡고 나머지를 외적으로 만든다.
+    scene0, bodies0, _ = parse(a.assets, a.xml)          # 1차: 원좌표로 읽어 축을 잰다
+    rot = _anatomical_frame(scene0, bodies0)
+    scene, bodies, stats = parse(a.assets, a.xml, root_matrix=rot)   # 2차: 축을 맞춰 다시
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_bytes(trimesh.exchange.gltf.export_glb(scene))
     import json
