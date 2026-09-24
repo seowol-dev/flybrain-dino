@@ -1,0 +1,37 @@
+:root{--fg:#e9edf4;--muted:#8e9ab0;--accent:#7fd4ff;--warn:#ff6b7a;--ok:#7ee0a8}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#05070c;color:var(--fg);
+ font:14px/1.5 -apple-system,"Apple SD Gothic Neo","Pretendard",system-ui,sans-serif;overflow:hidden}
+canvas#gl{position:fixed;inset:0;display:block}
+#ui{position:fixed;inset:0;pointer-events:none}
+.panel{position:absolute;background:rgba(10,14,22,.62);backdrop-filter:blur(12px);
+ border:1px solid rgba(140,170,210,.16);border-radius:12px;padding:12px 14px}
+#title{left:26px;top:22px;max-width:430px}
+#title h1{margin:0 0 2px;font-size:19px;letter-spacing:-.01em}
+#title .sub{color:var(--muted);font-size:12.5px}
+#title .cite{color:#5d6a80;font-size:11px;margin-top:8px;line-height:1.45}
+#stats{right:26px;top:22px;min-width:210px}
+#stats .row{display:flex;justify-content:space-between;gap:14px;font-variant-numeric:tabular-nums}
+#stats .row b{font-weight:600}
+#stats .k{color:var(--muted)}
+#stats hr{border:0;border-top:1px solid rgba(140,170,210,.14);margin:8px 0}
+#flyview{right:26px;bottom:100px;width:280px;padding:8px}
+#flyview canvas{width:100%;border-radius:7px;display:block;image-rendering:pixelated}
+#flyview .cap{color:var(--muted);font-size:11.5px;margin-top:6px}
+#caption{left:50%;transform:translateX(-50%);bottom:96px;max-width:640px;text-align:center;
+ font-size:15px;line-height:1.6;transition:opacity .6s;opacity:0}
+#caption.on{opacity:1}
+#caption b{color:var(--accent);font-weight:600}
+#bar{left:50%;transform:translateX(-50%);bottom:24px;display:flex;gap:10px;align-items:center;
+ pointer-events:auto;padding:9px 12px}
+button{background:rgba(127,212,255,.13);color:var(--fg);border:1px solid rgba(127,212,255,.3);
+ border-radius:8px;padding:6px 12px;font:inherit;font-size:12.5px;cursor:pointer}
+button:hover{background:rgba(127,212,255,.24)}
+#seek{width:280px;accent-color:var(--accent)}
+#legend{left:26px;bottom:24px;font-size:11.5px;line-height:1.85}
+#legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle}
+#loading{position:fixed;inset:0;display:grid;place-items:center;background:#05070c;z-index:9;transition:opacity .5s}
+#loading.done{opacity:0;pointer-events:none;visibility:hidden}
+.hint{color:#5d6a80;font-size:11px;margin-top:6px}
+body.kiosk #bar,body.kiosk #legend,body.kiosk .hint{opacity:0;transition:opacity .4s}
+body.kiosk #bar:hover{opacity:1}

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>초파리가 하는 크롬 공룡게임 — FlyWire 전뇌 시뮬레이션</title>
+<meta name="description" content="초파리 전뇌 커넥톰(138,639 뉴런)을 실시간으로 시뮬레이션해 크롬 공룡게임을 플레이한다.">
+<link rel="stylesheet" href="./style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪰</text></svg>">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="ui">
+  <div class="panel" id="title">
+    <h1>초파리가 하는 크롬 공룡게임</h1>
+    <div class="sub">FlyWire 성체 초파리 전뇌 커넥톰 <b id="nneu">138,639</b>개 뉴런 ·
+      <b id="nsyn">54,492,592</b>개 시냅스를 leaky integrate-and-fire 로 실시간 시뮬레이션한 기록</div>
+    <div class="cite">뉴런 위치는 실제 FlyWire soma 좌표. 발화는 시뮬레이션 실측값.<br>
+      Dorkenwald et al. 2024 · Schlegel et al. 2024 · Shiu et al. 2024</div>
+  </div>
+
+  <div class="panel" id="stats">
+    <div class="row"><span class="k">시간</span><b id="s_t">0.0 s</b></div>
+    <div class="row"><span class="k">넘은 선인장</span><b id="s_score">0</b></div>
+    <div class="row"><span class="k">가장 가까운 선인장</span><b id="s_dist">–</b></div>
+    <div class="row"><span class="k">각크기 θ</span><b id="s_theta">0°</b></div>
+    <hr>
+    <div class="row"><span class="k">루밍 지표</span><b id="s_sig">0.00</b></div>
+    <div class="row"><span class="k">도약 임계</span><b id="s_th">1.80</b></div>
+    <div class="row"><span class="k">발화 중인 뉴런</span><b id="s_act">0</b></div>
+    <div class="row"><span class="k">도약</span><b id="s_jump">–</b></div>
+  </div>
+
+  <div class="panel" id="flyview">
+    <canvas id="eyecanvas" width="420" height="260"></canvas>
+    <div class="cap">파리의 겹눈에 들어오는 장면 — 다가오는 선인장이 커지는 <b>루밍</b> 자극</div>
+  </div>
+
+  <div class="panel" id="caption"></div>
+
+  <div class="panel" id="legend">
+    <div><i style="background:#2e66a0"></i>시엽 (optic, 77,530)</div>
+    <div><i style="background:#6b578c"></i>중앙뇌 (central, 32,379)</div>
+    <div><i style="background:#d9852f"></i>시각투사 LPLC2·LC4 (8,038)</div>
+    <div><i style="background:#eb4859"></i>하행뉴런 DNp01 거대섬유 (1,299)</div>
+  </div>
+
+  <div class="panel" id="bar">
+    <button id="play">일시정지</button>
+    <input id="seek" type="range" min="0" max="100" value="0">
+    <button id="cam">시점</button>
+    <button id="kiosk">전시 모드</button>
+    <button id="full">전체화면</button>
+  </div>
+</div>
+<div id="loading"><div style="text-align:center">
+  <div style="font-size:30px">🪰</div>
+  <div style="margin-top:10px;color:#8e9ab0" id="loadmsg">전뇌 기록 불러오는 중…</div>
+</div></div>
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.js"}}
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
