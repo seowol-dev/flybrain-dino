@@ -8,6 +8,7 @@
 // 로 내보낸다. 여기서 피벗을 기준으로 관절 계층을 복원해 머리·날개·앞다리를 움직인다.
 import * as THREE from '../vendor/three.module.js';
 import { GLTFLoader } from '../vendor/GLTFLoader.js';
+import { bakeDetail } from './fly_detail.js';
 
 const SKIN = {
   body: 0xb0682a, lower: 0xcb9a5f, black: 0x121212,
@@ -67,64 +68,83 @@ function depth(parts, name) {
   return d;
 }
 
-// 복부 가로띠. MuJoCo 모델은 몸이 단색 황갈색이지만 실제 D. melanogaster 는 각 배마디
-// 뒤쪽에 검은 띠가 있고 끝으로 갈수록 어두워진다. 몸 장축(z) 기준 톱니 함수로 정점색을
-// 칠해 이를 만든다. (형태가 아니라 색만 더한 것이다.)
-function abdomenBands(mesh) {
-  const g = mesh.geometry;
-  const pos = g.attributes.position;
-  g.computeBoundingBox();
-  const bb = g.boundingBox;
-  const z0 = bb.min.z, z1 = bb.max.z, span = Math.max(z1 - z0, 1e-6);
-  const col = new Float32Array(pos.count * 3);
-  const light = new THREE.Color(0xc79a53), dark = new THREE.Color(0x2b1c0c);
-  const c = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const u = (pos.getZ(i) - z0) / span;          // 0 = 앞, 1 = 뒤
-    const edge = Math.pow(Math.max(0, u - 0.42) / 0.58, 1.4);   // 마디 뒤쪽이 어둡다
-    c.copy(light).lerp(dark, Math.min(1, edge));
-    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+// 부위 분류 — MuJoCo geom 이름(`body__geom`)에서 재질 종류를 읽는다.
+function kindOf(name) {
+  if (/_red\b|red$|_red_/.test(name)) return 'eye';
+  if (/ocelli/.test(name)) return 'ocelli';
+  if (/wing/.test(name)) return 'wing';
+  if (/bristle|_black/.test(name)) return 'bristle';
+  if (/abdomen/.test(name)) return 'abdomen';
+  return 'cuticle';
+}
+
+// 정점색의 밝기로 거칠기를 변조한다. 골(어두운 곳)은 거칠고 융기(밝은 곳)는 매끈하다.
+// 표면이 '진짜'로 보이는 데는 알베도보다 광택 변화가 더 크게 기여한다. UV 가 없어
+// roughnessMap 을 못 쓰므로 셰이더에 직접 주입한다.
+function roughnessFromColor(mat, amount) {
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <roughnessmap_fragment>',
+      `#include <roughnessmap_fragment>
+       #ifdef USE_COLOR
+         float _lum = dot(vColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+         roughnessFactor = clamp(roughnessFactor + (1.0 - _lum) * ${amount.toFixed(3)}, 0.03, 1.0);
+       #endif`);
+  };
+  mat.customProgramCacheKey = () => `rgh${amount}`;
+  return mat;
+}
+
+// 부위별 물리 재질. 실제 초파리 큐티클은 얇은 왁스층이 있어 살짝 번들거리고,
+// 겹눈은 각막 렌즈 때문에 젖은 듯한 강한 정반사가 난다.
+function materialFor(kind, THREE) {
+  const common = { vertexColors: true, color: 0xffffff };
+  switch (kind) {
+    case 'eye':
+      return roughnessFromColor(new THREE.MeshPhysicalMaterial({
+        ...common, roughness: 0.12, metalness: 0.0,
+        clearcoat: 1.0, clearcoatRoughness: 0.04,       // 각막 렌즈
+        specularIntensity: 1.0, specularColor: new THREE.Color(0xfff0ec),
+        emissive: new THREE.Color(0x40060a), emissiveIntensity: 0.35,
+      }), 0.55);
+    case 'ocelli':
+      return new THREE.MeshPhysicalMaterial({
+        color: 0x3a2008, roughness: 0.12, clearcoat: 1.0, clearcoatRoughness: 0.03,
+        emissive: new THREE.Color(0x1a0d02), emissiveIntensity: 0.4,
+      });
+    case 'wing':
+      return new THREE.MeshPhysicalMaterial({
+        ...common, transparent: true, opacity: 0.34, depthWrite: false,
+        roughness: 0.06, metalness: 0.0, side: THREE.DoubleSide,
+        iridescence: 1.0, iridescenceIOR: 1.32,
+        iridescenceThicknessRange: [180, 520],          // 얇은 막 간섭 → 무지개빛
+        clearcoat: 1.0, clearcoatRoughness: 0.04,
+      });
+    case 'bristle':
+      return new THREE.MeshPhysicalMaterial({
+        ...common, roughness: 0.52, metalness: 0.05, clearcoat: 0.25, clearcoatRoughness: 0.45,
+      });
+    case 'abdomen':
+      return roughnessFromColor(new THREE.MeshPhysicalMaterial({
+        ...common, roughness: 0.30, metalness: 0.05,
+        clearcoat: 0.30, clearcoatRoughness: 0.32,
+        sheen: 0.18, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xffd9a0),
+      }), 0.62);
+    default:                                            // cuticle
+      return roughnessFromColor(new THREE.MeshPhysicalMaterial({
+        ...common, roughness: 0.28, metalness: 0.07,
+        clearcoat: 0.32, clearcoatRoughness: 0.30,
+        sheen: 0.20, sheenRoughness: 0.55, sheenColor: new THREE.Color(0xffd9a0),
+      }), 0.66);
   }
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
 }
 
 function tune(mesh, name) {
-  const m = mesh.material;
-  const hex = (k) => new THREE.Color(SKIN[k]);
-  const set = (color, opts = {}) => {
-    mesh.material = new THREE.MeshPhysicalMaterial({
-      color, roughness: 0.42, metalness: 0.12, clearcoat: 0.45, clearcoatRoughness: 0.35,
-      ...opts,
-    });
-  };
-  if (/_red\b|_red__|red/.test(name)) {
-    // 겹눈 — 살짝 발광시켜 시각 입력 세기를 표현한다
-    set(hex('red'), { roughness: 0.28, clearcoat: 0.9, clearcoatRoughness: 0.12,
-      emissive: new THREE.Color(0x3a0206), emissiveIntensity: 0.5 });
-    mesh.userData.isEye = true;
-  } else if (/ocelli/.test(name)) {
-    set(hex('ocelli'), { roughness: 0.2, clearcoat: 1.0 });
-  } else if (/black|bristle/.test(name)) {
-    set(hex('black'), { roughness: 0.55, clearcoat: 0.25 });
-  } else if (/wing/.test(name)) {
-    mesh.material = new THREE.MeshPhysicalMaterial({
-      color: 0xdfeaf6, roughness: 0.08, metalness: 0.0, transparent: true, opacity: 0.30,
-      transmission: 0.0, side: THREE.DoubleSide, depthWrite: false,
-      iridescence: 0.9, iridescenceIOR: 1.25, clearcoat: 1.0,
-    });
-  } else if (/abdomen/.test(name)) {
-    abdomenBands(mesh);
-    set(0xffffff, { vertexColors: true, roughness: 0.38, clearcoat: 0.55 });
-    mesh.material.vertexColors = true;
-  } else if (/lower/.test(name)) {
-    set(hex('lower'));
-  } else if (/brown/.test(name)) {
-    set(hex('brown'));
-  } else if (/thorax/.test(name)) {
-    set(0x9c6a2e, { roughness: 0.36, clearcoat: 0.6 });
-  } else {
-    set(m && m.color ? m.color : hex('body'));
-  }
+  const kind = kindOf(name);
+  // 지오메트리에서 요철·반점을 계산해 정점색으로 굽는다 (UV 가 없어 텍스처를 못 쓴다)
+  if (kind !== 'ocelli') bakeDetail(mesh, kind === 'bristle' ? 'bristle' : kind, THREE);
+  mesh.material = materialFor(kind, THREE);
+  if (kind === 'eye') mesh.userData.isEye = true;
 }
 
 /** 프레임 애니메이션. jumpPulse 0~1, act 0~1(시각 입력 세기). */

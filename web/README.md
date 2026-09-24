@@ -15,7 +15,8 @@ cd web && python3 -m http.server 8000     # http://localhost:8000
 | 점이 밝아지는 순간 | LIF 시뮬레이션에서 그 뉴런이 실제로 발화한 시점 (20 Hz 표본) |
 | 모니터의 게임 화면 | 폐회로 실행 중의 실제 게임 상태 |
 | 파리 시점 패널 | 광수용체에 투영된 장면을 같은 기하로 다시 그린 것 |
-| 초파리 3D 모델 | **TuragaLab/flybody** 의 해부학적 성체 *D. melanogaster* 몸 모델 (Apache-2.0). 날개 시맥·강모·부절 마디까지 실제 형태다. 출처와 변경 내역은 [`assets/ATTRIBUTION.md`](assets/ATTRIBUTION.md) |
+| 초파리 3D 모델 | **TuragaLab/flybody** 의 해부학적 성체 *D. melanogaster* 몸 모델 (Apache-2.0). 날개 시맥·강모·부절 마디·겹눈 낱눈까지 실제 형태다. 출처와 변경 내역은 [`assets/ATTRIBUTION.md`](assets/ATTRIBUTION.md) |
+| 초파리 표면 질감 | 지오메트리에서 계산한 것이지 사진 텍스처가 아니다. 아래 참고 |
 
 ## 조작
 
@@ -32,6 +33,24 @@ cd web && python3 -m http.server 8000     # http://localhost:8000
 ```
 https://<user>.github.io/<repo>/?kiosk=1
 ```
+
+## 표면 질감을 어떻게 만들었나
+
+이 모델에는 UV 가 없어서 이미지 텍스처를 입힐 수 없다. 대신 `src/fly_detail.js` 가
+**지오메트리 자체에서** 세 가지를 계산해 정점색(COLOR_0)으로 굽는다.
+
+1. **요철(cavity)** — 이웃 정점들의 평균 위치가 법선 안쪽에 있으면 오목한 곳이다.
+   낱눈 사이 골, 배마디 틈, 강모 뿌리가 어두워진다. 국소 모서리 길이로 정규화하므로
+   메시 크기와 무관하다(메시 반지름으로 나누면 흉부 같은 큰 면에서 값이 0 으로 죽는다).
+2. **반점(mottle)** — 3D 값잡음. 실제 큐티클은 균일한 플라스틱이 아니다.
+3. **부위별 음영** — 등쪽(+y)이 어둡고, 복부는 마디 뒤쪽이 검다(실제 *D. melanogaster*).
+
+그리고 `fly_model.js` 의 `roughnessFromColor()` 가 셰이더에 한 줄을 주입해
+**정점색 밝기로 거칠기를 변조**한다. 골은 거칠고 융기는 매끈하다. 표면이 진짜로 보이는
+데는 알베도보다 광택 변화가 더 크게 기여한다.
+
+겹눈은 clearcoat 1.0 / clearcoatRoughness 0.04 로 각막 렌즈의 젖은 반사를, 날개는
+iridescence 로 얇은 막 간섭(무지개빛)을 만든다.
 
 ## 3D 모델 다시 만들기
 
